@@ -19,4 +19,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     layer.timeout = timeout;
     
     llopen(layer);
+
+    FILE * fp;
+    
+
+
 }
