@@ -1,5 +1,7 @@
 {
     "files.associations": {
-        "link_layer.h": "c"
+        "link_layer.h": "c",
+        "application_layer.h": "c",
+        "cstdio": "c"
     }
 }

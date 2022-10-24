@@ -8,6 +8,10 @@
 #include <fcntl.h>
 #include <stdlib.h>
 
+#include <string.h>
+#include <signal.h>
+
+
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
@@ -19,23 +23,154 @@
 #define FLAG 0x7E
 #define A 0x03
 #define C_SET 0x03
-#define BCC_RCV A ^C_SET
+#define C_UA 0x07
+#define BCC_RCV A ^ C_SET
 
 #define ESCAPE 0x7D
+
+unsigned char BUFFER[SET_SIZE];
+
+struct termios old_serial_port_settings;
+struct termios new_serial_port_settings;
+
+enum STATE
+{
+    START,
+    FLAG_RCV,
+    A_RCV,
+    C_RCV,
+    BCC_OK,
+    STOP
+} state = START;
+unsigned char C_received = 0x00;
+
+int alarmEnabled = FALSE;
+int alarmCount = 0;
+
+void setUpSerialPort(LinkLayer connectionParameters, int fd)
+{
+    // Save current port settings
+    if (tcgetattr(fd, &old_serial_port_settings) < 0)
+    {
+        perror("\nFailed to get termios structure: tcgetattr");
+        exit(-1);
+    }
+
+    // Clear struct for new port settings
+    memset(&new_serial_port_settings, 0, sizeof(new_serial_port_settings));
+
+    // setting baud rate
+    new_serial_port_settings.c_cflag = connectionParameters.baudRate | CS8 | CLOCAL | CREAD;
+    new_serial_port_settings.c_iflag = IGNPAR;
+    new_serial_port_settings.c_oflag = 0;
+
+    // Set input mode (non-canonical, no echo,...)
+    new_serial_port_settings.c_lflag = 0;
+    new_serial_port_settings.c_cc[VTIME] = 0; // Inter-character timer unused
+    new_serial_port_settings.c_cc[VMIN] = 1;  // Blocking read until 1 chars received
+
+    tcflush(fd, TCIOFLUSH);
+
+    if (tcsetattr(fd, TCSANOW, &new_serial_port_settings) < 0)
+    {
+        perror("\nFailed to set serial attributes: tcsetattr");
+        exit(5);
+    }
+    printf("\nNew termios structure set\n");
+}
+
+void generateSetTrama(unsigned char C)
+{
+    //buffer = malloc(size * sizeof(unsigned char));
+
+    BUFFER[0] = FLAG;
+    BUFFER[1] = A;
+    BUFFER[2] = C;
+    BUFFER[3] = A ^ C;
+    BUFFER[4] = FLAG;
+
+    printf("\nTrama Set");
+}
+
+unsigned char stateMachine(int fd, unsigned char expected_C)
+{
+
+    unsigned char byte;
+
+    // maybe do not call return
+    if (read(fd, &byte, 1) < 0)
+    {
+        perror("\nRead Failed on state machine");
+        return -1;
+    }
+
+    switch (state)
+    {
+    case START: // FLAG
+        if (byte == FLAG)
+            state = FLAG_RCV;
+        else
+            state = START;
+        break;
+
+    case FLAG_RCV: // expecting A
+        if (byte == A)
+            state = A_RCV;
+        else if (byte == FLAG)
+            state = FLAG_RCV;
+        else
+            state = START;
+        // otherwise e stays in the same state FLAG RCV4
+        break;
+
+    case A_RCV:
+        if (byte == expected_C)
+            state = C_RCV;
+        else if (byte != FLAG)
+            state = FLAG_RCV;
+        else
+            state = START;
+        break;
+
+    case C_RCV:
+        if (byte == (A ^ expected_C))
+            state = BCC_OK;
+        else
+            state = START;
+        break;
+
+    case BCC_OK:
+        if (byte == FLAG)
+            state = STOP;
+        else
+            state = START;
+        break;
+
+    default:
+        return -1;
+        break;
+    }
+
+    return C_received;
+}
+
+// Alarm function handler
+void alarmHandler(int signal)
+{
+    alarmEnabled = FALSE;
+    alarmCount++;
+
+    printf("\nAlarm #%d\n", alarmCount);
+}
 
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
 int llopen(LinkLayer connectionParameters)
 {
-/*typedef struct
-{
-    char serialPort[50];
-    LinkLayerRole role;
-    int baudRate;
-    int nRetransmissions;
-    int timeout;
-} LinkLayer;*/
+    (void)signal(SIGALRM, alarmHandler);
+
+    //unsigned char *SET = NULL;
 
     const char *serialPortName = connectionParameters.serialPort;
 
@@ -46,73 +181,57 @@ int llopen(LinkLayer connectionParameters)
         exit(-1);
     }
 
-	struct termios old_serial_port_settings;
-	struct termios new_serial_port_settings;
+    setUpSerialPort(connectionParameters, fd);
+    // printf("\n%d", connectionParameters.role);
 
-    // Save current port settings
-	if (tcgetattr(fd, &old_serial_port_settings) < 0)
-	{
-		perror("Failed to get termios structure: tcgetattr");
-		exit(-1);
-	}
-
-    // Clear struct for new port settings
-    memset(&new_serial_port_settings, 0, sizeof(new_serial_port_settings));
-
-	// setting baud rate to B38400
-    new_serial_port_settings.c_cflag = connectionParameters.baudRate | CS8 | CLOCAL | CREAD;
-    new_serial_port_settings.c_iflag = IGNPAR;
-    new_serial_port_settings.c_oflag = 0;
-
-    // Set input mode (non-canonical, no echo,...)
-    new_serial_port_settings.c_lflag = 0;
-    new_serial_port_settings.c_cc[VTIME] = 0; // Inter-character timer unused
-    new_serial_port_settings.c_cc[VMIN] = 1;  // Blocking read until 1 chars received
-
-    // VTIME e VMIN should be changed in order to protect with a
-    // timeout the reception of the following character(s)
-
-    // Now clean the line and activate the settings for the port
-    // tcflush() discards data written to the object referred to
-    // by fd but not transmitted, or data received but not read,
-    // depending on the value of queue_selector:
-    //   TCIFLUSH - flushes data received but not read.
-    tcflush(fd, TCIOFLUSH);
-
-	if (tcsetattr(fd, TCSANOW, &new_serial_port_settings) < 0)
-	{
-		perror("Failed to set serial attributes: tcsetattr");
-		exit(5);
-	}
-	printf("New termios structure set\n");
-
+    int stop = FALSE;
 
     switch (connectionParameters.role)
     {
-    case LlTx://TRANSMISSOR:
-        unsigned char SET[SET_SIZE];
-        SET[0] = FLAG;
-        SET[1] = A;
-        SET[2] = C_SET;
-        SET[3] = BCC_RCV;
-        SET[4] = FLAG;
+    case LlTx:; // TRANSMISSOR:
 
-        int Bytes = 0;
+        while (stop == FALSE && alarmCount < connectionParameters.nRetransmissions)
+        {
+            if (alarmEnabled == FALSE)
+            {
+                generateSetTrama(C_SET);
+                if (write(fd, BUFFER, SET_SIZE) > 0)
+                {
+                    printf("C_SET enviado\n");
+                }
+                alarm(connectionParameters.timeout); // Set alarm to be triggered in 3s
+                alarmEnabled = TRUE;
+            }
 
+            while (state != STOP)
+            {
+                stateMachine(fd, C_UA);
+            }
+            state = START;
+            stop = TRUE;
+            alarm(0);
+            
+        }
 
-        Bytes = write(fd, SET, SET_SIZE);
-        
         break;
-    
-    case LlRx://RECEIVER:
 
-        
+    case LlRx:; // RECEIVER:
+        while (state != STOP)
+        {
+            stateMachine(fd, C_SET);
+        }
+        state = START;
+        stop = TRUE;
 
-        break;
+        generateSetTrama(C_UA);
+        if (write(fd, BUFFER, SET_SIZE) > 0)
+        {
+            printf("\nC_UA enviado\n");
+        }
+
     default:
         break;
     }
-
     return -1;
 }
 
