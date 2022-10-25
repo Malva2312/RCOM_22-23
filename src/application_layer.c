@@ -21,7 +21,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     llopen(layer);
 
     FILE * fp;
-    
+    llclose(0);
 
 
 }

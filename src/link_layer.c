@@ -14,7 +14,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
@@ -24,13 +23,16 @@
 #define SET_SIZE 5
 
 #define FLAG 0x7E
-#define A 0x03
+#define A_T 0x03
+#define A_R 0x01
 #define C_SET 0x03
 #define C_UA 0x07
+#define C_DISC 0x0b
 #define BCC_RCV A ^ C_SET
 
 #define ESCAPE 0x7D
 
+unsigned char A = A_T;
 unsigned char BUFFER[SET_SIZE];
 
 struct termios old_serial_port_settings;
@@ -100,7 +102,7 @@ void generateSetTrama(unsigned char C)
 
 int stateMachine(int fd, unsigned char expected_C)
 {
-    //printf("\nStarting StateMachine");
+    // printf("\nStarting StateMachine");
     unsigned char byte;
 
     // maybe do not call return
@@ -116,12 +118,12 @@ int stateMachine(int fd, unsigned char expected_C)
         if (byte == FLAG)
         {
             state = FLAG_RCV;
-            //printf("\nFLAG_RCV");
+            // printf("\nFLAG_RCV");
         }
         else
         {
             state = START;
-            //printf("\nStart");
+            // printf("\nStart");
         }
         break;
 
@@ -129,18 +131,18 @@ int stateMachine(int fd, unsigned char expected_C)
         if (byte == A)
         {
             state = A_RCV;
-            //printf("\nA_RCV");
+            // printf("\nA_RCV");
         }
         else if (byte == FLAG)
         {
             state = FLAG_RCV;
-            //printf("\nFLAG_RCV");
+            // printf("\nFLAG_RCV");
         }
         else
         {
             state = START;
-            //printf("\nSTART");
-            // otherwise e stays in the same state FLAG RCV4
+            // printf("\nSTART");
+            //  otherwise e stays in the same state FLAG RCV4
         }
 
         break;
@@ -149,17 +151,17 @@ int stateMachine(int fd, unsigned char expected_C)
         if (byte == expected_C)
         {
             state = C_RCV;
-            //printf("\nC_RCV");
+            // printf("\nC_RCV");
         }
         else if (byte == FLAG)
         {
             state = FLAG_RCV;
-            //printf("FLAG_RCV");
+            // printf("FLAG_RCV");
         }
         else
         {
             state = START;
-            //printf("\nSTART");
+            // printf("\nSTART");
         }
 
         break;
@@ -168,12 +170,12 @@ int stateMachine(int fd, unsigned char expected_C)
         if (byte == (A ^ expected_C))
         {
             state = BCC_OK;
-            //printf("\nBCC_OK");
+            // printf("\nBCC_OK");
         }
 
         else
         {
-            //printf("\nSTART");
+            // printf("\nSTART");
             state = START;
         }
 
@@ -184,23 +186,23 @@ int stateMachine(int fd, unsigned char expected_C)
         {
             state = STOP;
             alarm(0);
-            //printf("\nSTOP");
+            // printf("\nSTOP");
         }
 
         else
         {
             state = START;
-            //printf("\nSTART");
+            // printf("\nSTART");
         }
 
         break;
 
-    default: 
-        //printf("\nERRO ON STATEMACHINE");
+    default:
+        // printf("\nERRO ON STATEMACHINE");
         return -1;
         break;
     }
-    //printf("\nEnded StateMachine");
+    // printf("\nEnded StateMachine");
     return 0;
     // return C_received;
 }
@@ -210,9 +212,9 @@ void alarmHandler(int signal)
 {
     alarmEnabled = FALSE;
     alarmCount++;
-    //alarm(new_layer.timeout);
-    //printf("\nALARM_ENABLED: %d\n", alarmEnabled);
-    //printf("\nALARM_COUNTER: %d\n", alarmCount);
+    // alarm(new_layer.timeout);
+    // printf("\nALARM_ENABLED: %d\n", alarmEnabled);
+    // printf("\nALARM_COUNTER: %d\n", alarmCount);
     return;
 }
 
@@ -238,6 +240,8 @@ int llopen(LinkLayer connectionParameters)
     // printf("\n%d", connectionParameters.role);
 
     int stop = FALSE;
+    alarmEnabled = FALSE;
+    alarmCount = 0;
 
     switch (new_layer.role)
     {
@@ -245,12 +249,12 @@ int llopen(LinkLayer connectionParameters)
 
         while (stop == FALSE && alarmCount < new_layer.nRetransmissions)
         {
-            //printf("\nLOOP START: %d" , alarmEnabled);
+            // printf("\nLOOP START: %d" , alarmEnabled);
             if (alarmEnabled == FALSE)
             {
-                //printf("\n[LOG] Sending SET #%d\n", alarmCount);
-                //printf("\nHERE: %d", alarmEnabled);
-                //printf("\nalarm nº:%d", alarmCount);
+                // printf("\n[LOG] Sending SET #%d\n", alarmCount);
+                // printf("\nHERE: %d", alarmEnabled);
+                // printf("\nalarm nº:%d", alarmCount);
                 generateSetTrama(C_SET);
                 int buffer_size = sizeof(BUFFER);
                 if (write(fd, BUFFER, buffer_size) > 0)
@@ -270,17 +274,16 @@ int llopen(LinkLayer connectionParameters)
             {
                 stop = TRUE;
                 printf("\nTrama Received\n");
-                
             }
-            // state = START;
-            // stop = TRUE;
         }
         state = START;
-        //printf("\nSTART");
-        if (alarmCount >= new_layer.nRetransmissions){
-            printf("\nTime Out\n");
-        }
+        // printf("\nSTART");
         alarm(0);
+        if (alarmCount >= new_layer.nRetransmissions)
+        {
+            printf("\nTime Out\n");
+            return -1;
+        }
 
         break;
 
@@ -301,7 +304,7 @@ int llopen(LinkLayer connectionParameters)
     default:
         break;
     }
-    return -1;
+    return 0;
 }
 
 ////////////////////////////////////////////////
@@ -309,7 +312,9 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    int new_size = bufSize + 6; // FLAG + A + C + BCC1 + BCC2 + FLAG
+    int new_size = bufSize + 6; // FLAG + A + C + BCC1 + ... + BCC2 + FLAG
+
+    // generateSetTrama();
 
     return 0;
 }
@@ -329,7 +334,94 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 int llclose(int showStatistics)
 {
-    // TODO
+    int stop = FALSE;
+    alarmEnabled = FALSE;
+    alarmCount = 0;
 
-    return 1;
+    state = START;
+
+    switch (new_layer.role)
+    {
+    case LlTx:
+
+        while (stop == FALSE && alarmCount < new_layer.nRetransmissions)
+        {
+            if (alarmEnabled == FALSE)
+            {
+                A = A_T;
+                generateSetTrama(C_DISC);
+                int buffer_size = sizeof(BUFFER);
+
+                if (write(fd, BUFFER, buffer_size) > 0)
+                {
+                    printf("\nC_DISC enviado\n");
+                }
+                A = A_R;
+                alarm(new_layer.timeout); // Set alarm to be triggered in 3s
+                alarmEnabled = TRUE;
+                state = START;
+            }
+
+            stateMachine(fd, C_DISC);
+
+            if (state == STOP)
+            {
+                stop = TRUE;
+                printf("\nC_DISC Received\n");
+            }
+        }
+
+        state = START;
+        // printf("\nSTART");
+        alarm(0);
+
+        if (alarmCount >= new_layer.nRetransmissions)
+        {
+            printf("\nTime Out\n");
+            return -1;
+        }
+
+        A = A_R;
+        generateSetTrama(C_UA);
+        if (write(fd, BUFFER, SET_SIZE) > 0)
+        {
+            printf("\nC_UA enviado\n");
+        }
+        break;
+
+    case LlRx:
+
+        A = A_T;
+        while (state != STOP)
+        {
+            stateMachine(fd, C_DISC);
+        }
+        printf("Received DISC\n");
+
+        A = A_R;
+        generateSetTrama(C_DISC);
+        if (write(fd, BUFFER, SET_SIZE) > 0)
+        {
+            printf("\nC_DISK enviado\n");
+        }
+
+        stop = FALSE;
+        state = START;
+        while (state != STOP)
+        {
+            stateMachine(fd, C_UA);
+        }
+        printf("\nReceived C_UA");
+
+        break;
+    default:
+        break;
+    }
+    if (tcsetattr(fd, TCSANOW, &old_serial_port_settings) >= 0)
+    {
+        printf("\nOld termios structure set\n");
+    }
+    printf("\nFIM DE TRANSMISSAO\n");
+
+    return 0;
 }
