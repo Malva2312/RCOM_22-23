@@ -43,10 +43,10 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         exit(-1);
     }
 
-    printf("\nConnected through serial port");
+    printf("\nConnected through serial port\n\n\n");
 
 
-
+    
     if (layer.role == LlTx){
         sleep(2);
         unsigned char buff[50];
@@ -55,12 +55,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     }
 
     else if (layer.role == LlRx){
-        printf("HERE");
+
         unsigned char *packet;
-        while (llread(&packet) >0)
-        {
-            printf("HERE2");
-        }
+        llread(packet);
 
         //llread(packet);
     }
