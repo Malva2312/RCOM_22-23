@@ -38,6 +38,7 @@
 #define ESCAPE_ESCAPE 0x5d
 
 #define FLAGS_SIZE 4
+#define READ_SIZE 1
 
 unsigned char A = A_T;
 
@@ -224,7 +225,7 @@ void setUpSerialPort(LinkLayer connectionParameters, int fd)
     // Set input mode (non-canonical, no echo,...)
     new_serial_port_settings.c_lflag = 0;
     new_serial_port_settings.c_cc[VTIME] = 0; // Inter-character timer unused
-    new_serial_port_settings.c_cc[VMIN] = 0;  // Blocking read until 1 chars received
+    new_serial_port_settings.c_cc[VMIN] = 1;  // Blocking read until 1 chars received
 
     tcflush(fd, TCIOFLUSH);
 
@@ -277,8 +278,7 @@ int llopen(LinkLayer connectionParameters)
                     printf("\nC_SET enviado\n");
                 }
 
-                // Now that we sent SET, let's call the alarm and read write
-                alarm(new_layer.timeout); // Set alarm to be triggered in 3s
+                alarm(new_layer.timeout);
                 alarmEnabled = TRUE;
                 state = START;
             }
@@ -292,7 +292,6 @@ int llopen(LinkLayer connectionParameters)
             }
         }
         state = START;
-        // printf("\nSTART");
         alarm(0);
         if (alarmCount >= new_layer.nRetransmissions)
         {
@@ -308,7 +307,7 @@ int llopen(LinkLayer connectionParameters)
             stateMachine(fd, C_SET);
         }
         state = START;
-        stop = TRUE;
+        //stop = TRUE;
 
         generateSetTrama(C_UA);
         if (write(fd, BUFFER, SET_SIZE) > 0)
@@ -340,7 +339,7 @@ void test(unsigned char *trama, unsigned int size)
 }
 unsigned char calculateBCC2(const unsigned char *buf, int bufSize)
 {
-    if (bufSize <= 0)
+    if (bufSize < 0)
     {
         printf("\nERROR BUF_SIZE: %d\n", bufSize);
     }
@@ -353,9 +352,9 @@ unsigned char calculateBCC2(const unsigned char *buf, int bufSize)
     return BCC2;
 }
 
-void copyMsg(const unsigned char *buf, int bufSize, unsigned char *new_buf, int new_size)
+void copyMsg(const unsigned char *buf, int bufSize, unsigned char *new_buf)
 {
-    if (bufSize <= 0)
+    if (bufSize < 0)
     {
         printf("\nERROR BUF_SIZE: %d\n", bufSize);
     }
@@ -378,108 +377,97 @@ int copyFlag(unsigned char *msg, unsigned int size, unsigned char BCC2)
     return 0;
 }
 
-unsigned int stuffing(unsigned char *buf, unsigned int size, unsigned char *Newmsg, unsigned int sizeBuf)
+unsigned char * stuffing(const unsigned char *buf, unsigned int size, unsigned int * sizeBuf  )
 {
-    int start_flag = FLAGS_SIZE;
+    int start = 0;
+    unsigned char * Newmsg = (unsigned char *) malloc(sizeof(unsigned char) * (*sizeBuf)); 
 
     for (int i = 0; i < size; i++)
     {
         if (buf[i] == FLAG)
         {
-            sizeBuf++;
-            Newmsg = (unsigned char *)realloc(Newmsg, sizeBuf);
-            Newmsg[start_flag] = ESCAPE;
-            Newmsg[start_flag + 1] = ESCAPE_FLAG;
+            (*sizeBuf)++;
+            Newmsg = (unsigned char *)realloc(Newmsg, (*sizeBuf));
+            Newmsg[start] = ESCAPE;
+            Newmsg[start + 1] = ESCAPE_FLAG;
 
-            start_flag = start_flag + 2;
+            start = start + 2;
         }
 
         else if (buf[i] == ESCAPE)
         {
-            sizeBuf++;
-            Newmsg = (unsigned char *)realloc(Newmsg, sizeBuf);
-            Newmsg[start_flag] = ESCAPE;
-            Newmsg[start_flag + 1] = ESCAPE_ESCAPE;
+            (*sizeBuf)++;
+            Newmsg = (unsigned char *)realloc(Newmsg, (*sizeBuf));
+            Newmsg[start] = ESCAPE;
+            Newmsg[start + 1] = ESCAPE_ESCAPE;
 
-            start_flag = start_flag + 2;
+            start = start + 2;
         }
 
         else
         {
-            Newmsg[start_flag] = buf[i];
-            start_flag++;
+            Newmsg[start] = buf[i];
+            start++;
         }
     }
-
-    return sizeBuf;
-}
-
-void changeS(enum S *s_sent)
-{
-    if (*s_sent == ZERO)
-    {
-        *s_sent = ONE;
-    }
-    else
-        *s_sent = ZERO;
+    return Newmsg;
 }
 
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    // printf("%s", buf);
-    int new_size = bufSize + 6; // FLAG + A + C + BCC1 + ... + BCC2 + FLAG
-    static enum S S_Sent = ONE;
-    changeS(&S_Sent);
+    unsigned char BCC2 = calculateBCC2(buf, bufSize);
+    unsigned int size = bufSize;
+    unsigned char * stuffed = (unsigned char *) malloc(size * sizeof(unsigned char));
+    stuffed = stuffing(buf, bufSize, &size);
+
+    static int n_sequencial = 0;
+    
     int stop = FALSE;
     alarmEnabled = FALSE;
     alarmCount = 0;
 
-    unsigned char *newMsg = (unsigned char *)malloc(sizeof(unsigned char) * new_size);
-
+    unsigned char byte = 0x00;
+    
     while (stop == FALSE && alarmCount < new_layer.nRetransmissions)
     {
         if (alarmEnabled == FALSE)
         {
-            //copyMsg(buf, bufSize, newMsg, new_size);
-            unsigned char BCC2 = calculateBCC2(buf, bufSize);
+            generateSetTrama(C_INF(n_sequencial));
+            unsigned char *msg = (unsigned char *)malloc((size + 6) * sizeof(unsigned char));
+            copyFlag(msg, size + 6, BCC2);
+            copyMsg(stuffed, size, msg);
 
-            printf("\nBCC2 %he\n\n", BCC2);
-
-            new_size = stuffing(buf, bufSize, newMsg, new_size);
-            generateSetTrama(C_INF(S_Sent));
-            copyFlag(newMsg, new_size, BCC2);
-
-            if (write(fd, newMsg, new_size) > 0)
+            if (write(fd, msg, (size + 6)) > 0)
             {
-                printf("\nDados enviado C_INF: %d\n", S_Sent);
+                printf("\nDATA enviada\n");
             }
-
-            test(newMsg, new_size);
 
             alarm(new_layer.timeout);
             alarmEnabled = TRUE;
             state = START;
         }
 
-        unsigned char byte = stateMachine(fd, C_RR((int)(1 - S_Sent)));
-        if ((state == C_RCV) && (byte == C_REJ((int)(1 - S_Sent))))
-        {
-            printf("\nTRAMA CORROMPIDA");
-            alarmEnabled = FALSE;
-        }
+
+        enum STATE last_state = state;
+        byte = stateMachine(fd, C_RR(!n_sequencial));
+
+
+
         if (state == STOP)
         {
             stop = TRUE;
-            printf("\nResposta Recebida Received\n");
+            n_sequencial = !n_sequencial;
+            printf("\nC_INF Received\n");
         }
     }
     state = START;
     alarm(0);
     if (alarmCount >= new_layer.nRetransmissions)
     {
-        printf("\nTime Out\n\n\n");
+        printf("\nTime Out llwrite\n");
         return -1;
     }
+
     return 0;
 }
 
@@ -516,96 +504,131 @@ unsigned int destuffing(unsigned char *vet, unsigned int size)
 }
 int llread(unsigned char *packet)
 {
-
-    static enum S S_Sent = ZERO;
-    changeS(&S_Sent);
-    int size = 0;
+    int n_sequencial = 0;
+    unsigned char * msg_rcv = (unsigned char *) malloc(0);
+    unsigned int size_rcv = 0;
     state = START;
-    unsigned char byte;
-    int bytes_read;
 
-    unsigned char *buff = (unsigned char *)malloc(size);
-    unsigned char BCC2 = 0x00;
-    unsigned char *res;
     while (state != STOP)
     {
+        unsigned char byte;
+        int bytes_read = read(fd, &byte, READ_SIZE);
 
-        bytes_read = read(fd, &byte, 1);
         if (bytes_read < 0)
         {
             perror("\nERRO RECEIVING TRAMA\n");
             return -1;
         }
+
         switch (state)
         {
         case START:
             if (byte == FLAG)
+            {
                 state = FLAG_RCV;
+                printf("\nFLAG\n\n");
+            }
             else
                 state = START;
             break;
+
 
         case FLAG_RCV:
-            if (byte == A)
+            if (byte == A){
                 state = A_RCV;
-            else if (byte == FLAG)
+                printf("\nA_RCV\n\n");
+            }
+
+            else if (byte == FLAG){
                 state = FLAG_RCV;
+                printf("\nFLAG\n\n");
+            }
             else
                 state = START;
             break;
+
 
         case A_RCV:
-            if (byte == C_INF(1 - S_Sent))
+            if ((byte) == (C_INF(TRUE))){
                 state = C_RCV;
-            else if (byte == FLAG)
+                n_sequencial = TRUE;
+                printf("\nC_RCV\n\n");
+            }
+            else if ((byte) == (C_INF(FALSE))){
+                state = C_RCV;
+                n_sequencial = FALSE;
+                printf("\nC_RCV\n\n");
+            }
+            else if (byte == FLAG){
                 state = FLAG_RCV;
-            else
-                state = START;
-            break;
-        case C_RCV:
-            if (byte == (A ^ C_INF(1 - S_Sent)))
-                state = BCC_OK;
+                printf("\nFLAG\n\n");
+            }
             else
                 state = START;
             break;
 
+
+        case C_RCV:
+            if (byte == ((A) ^ (C_INF(n_sequencial)) )){
+                printf("\nBCC OK\n\n");
+                state = BCC_OK;
+            }
+            else
+                state = START;
+            break;
+
+
         case BCC_OK:
-            if (byte == FLAG)
+            if (byte == FLAG){
+                printf("\nENDED\n\n");
                 state = STOP;
+            }
 
             else
             {
-                size++;
-                buff = realloc(buff, sizeof(unsigned char) * size);
-                buff[size - 1] = byte;
+                //printf("\nBYTE\n\n");
+                size_rcv++;
+                msg_rcv = realloc(msg_rcv, sizeof(unsigned char) * size_rcv);
+                msg_rcv[size_rcv - 1] = byte;
             }
-            break;
+
+
         default:
             break;
         }
     }
-    
-    BCC2 = buff[size-1];
-    size = destuffing(buff, size-1);
-    //packet = (unsigned char *) malloc(size);
-    //strcpy(packet, buff);
-    if (calculateBCC2(buff, size) != BCC2)
-    {
-        printf("\nBCC2 FAILED\n\n");
 
-        generateSetTrama(C_REJ(S_Sent));
-        if (write(fd, BUFFER, SET_SIZE) > 0)
+    unsigned char BCC2_RCV = msg_rcv[size_rcv -1];
+
+    destuffing(msg_rcv, size_rcv-1);
+    unsigned char BCC2 = calculateBCC2(msg_rcv, size_rcv-1);
+
+    if (BCC2 == BCC2_RCV)
+    {
+        printf("\nBCC2 is well received\n\n");
+        
+
+        generateSetTrama(C_RR(!n_sequencial));
+        if (write(fd, BUFFER, SET_SIZE) < 0){
+            printf("\nERRO SENDING C_RR\n");
+        }
+
+        for (unsigned int idx = 0; idx < size_rcv - 1; idx++)
         {
-            printf("\nC_REJ enviado\n\n");
+            packet[idx] = msg_rcv[idx];
         }
     }
     else
     {
-        generateSetTrama(C_RR(S_Sent));
-        if (write(fd, BUFFER, SET_SIZE) > 0)
+        generateSetTrama(C_REJ(!n_sequencial));
+        printf("\nBCC2 failed\n\n");
+        // REJ
+        if (write(fd, BUFFER, SET_SIZE) < 0)
         {
-            printf("\nC_REJ enviado\n");
+            printf("\nERRO SENDING C_REJ\n");
+
         }
+        return -1;
     }
 
     return 0;

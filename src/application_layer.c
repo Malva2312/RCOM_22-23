@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define READ_MODE 'r'
 #define WRITE_MODE 'w'
@@ -40,26 +41,46 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     {
         printf("\nHere");
         perror("\nCould not link\n");
-        exit(-1);
+        return;
     }
 
     printf("\nConnected through serial port\n\n\n");
 
 
-    
     if (layer.role == LlTx){
-        sleep(2);
-        unsigned char buff[50];
-        strcpy(buff, "\nHELLO WORLD!\0");
-        llwrite(buff, sizeof(buff));
+
+        unsigned char * packet = (unsigned char * ) malloc(sizeof(unsigned char) * MAX_BYTES);
+        
+        FILE * fptr = fopen(filename, "rb");
+        if (fptr == NULL)
+        {   
+            printf("\nFAIL OPENING FILE\n\n");
+            return 1;
+        }
+        while ( fread(packet, sizeof(unsigned char), sizeof(packet), fptr) != EOF){
+
+            llwrite(packet, MAX_BYTES);
+        }
+
+        strcpy(packet, "\0\0\0\0\0");
+        llwrite(packet, 5);
+        
+
     }
 
     else if (layer.role == LlRx){
+        unsigned char * packet = (unsigned char * ) malloc(sizeof(unsigned char) * MAX_BYTES);
+        FILE * fptr = fopen(filename, "wb");
+        
+        do
+        {
+            llread(packet);
+            fwrite(packet,sizeof(unsigned char),  sizeof(packet), fptr);
+        } while (strcmp(packet, "\0\0\0\0\0"));
+        
+        
+        
 
-        unsigned char *packet;
-        llread(packet);
-
-        //llread(packet);
     }
 
     /*
