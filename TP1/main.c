@@ -40,7 +40,8 @@ int main(int argc, char *argv[])
            TIMEOUT,
            filename);
 
-    applicationLayer(serialPort, role, BAUDRATE, N_TRIES, TIMEOUT, filename);
 
+    applicationLayer(serialPort, role, BAUDRATE, N_TRIES, TIMEOUT, filename);
+    
     return 0;
 }
